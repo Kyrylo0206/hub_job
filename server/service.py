@@ -227,6 +227,9 @@ class BaseHttpService(tornado.web.RequestHandler):
         self.ioloop = tornado.ioloop.IOLoop.current()
         self.ctl = self.application.settings["ctl"]
 
+    def require_top(self):
+        self.ctl or self.throw(503, message="TOP integration is not configured")
+
     async def call_sync_async(self, func, *args):
         return await self.ioloop.run_in_executor(None,
                                         func, *args)
@@ -268,6 +271,10 @@ class PlatformInfoHandler(BaseHttpService):
     @cachetools.func.ttl_cache(ttl=5*60)
     def get_top_info(self):
         data = {}
+        if self.ctl is None:
+            data["expire"] = None
+            data["limit"] = None
+            return data
         info = self.ctl.info()
         data["expire"] = info["data"]["expire"]
         data["limit"] = info["data"]["limit"]
@@ -311,6 +318,7 @@ class PlatformSpecificDeviceHandler(BaseHttpService):
         _, d = self.get_login_user_device(domain)
         self.tell({"data": self.to_dict(d)})
     def remove(self, domain):
+        self.require_top()
         user = self.get_login_user_admin()
         _, d = self.get_login_user_device(domain, user=user)
         res = self.ctl.deleteNode(d.token_id)
@@ -417,6 +425,7 @@ class PlatformDeviceHandler(BaseHttpService):
                                         Device.reg_time,
                                         Device.state,])
     def new(self):
+        self.require_top()
         domain = "d" + r_string(15)
         user = self.get_login_user_admin()
         comment = self.get_argument("comment", None)
@@ -715,21 +724,29 @@ class Service(object):
         self.read_exist_config()
         User.select().count() != 0 or self.prepare()
     def prepare(self):
-        tc = TopCtl(self.cfg["endpoint"], self.cfg["ckey"],
-                                        self.cfg["secret"])
-        net = tc.createNetwork(self.cfg["sid"])
-        nc = TopNetworkCtl(net["data"]["token"], self.cfg["endpoint"],
-                                        self.cfg["ckey"])
-        nw = nc.setupNetwork()
-        # create node same as network id
-        no = nc.createNode(token=net["data"]["token"],
-                           comment="server")
-        server = str(ip_network(nw["data"]["network"])[1])
-        ip = nc.setNodeStaticIp(net["data"]["token"], server,
-                                            "random")
         config = dict()
         config["sid"] = self.cfg["sid"]
-        config["server"] = server
+
+        if self.cfg["top_enabled"]:
+            try:
+                tc = TopCtl(self.cfg["endpoint"], self.cfg["ckey"],
+                                                self.cfg["secret"])
+                net = tc.createNetwork(self.cfg["sid"])
+                nc = TopNetworkCtl(net["data"]["token"], self.cfg["endpoint"],
+                                                self.cfg["ckey"])
+                nw = nc.setupNetwork()
+                # create node same as network id
+                nc.createNode(token=net["data"]["token"],
+                              comment="server")
+                server = str(ip_network(nw["data"]["network"])[1])
+                nc.setNodeStaticIp(net["data"]["token"], server,
+                                                    "random")
+                config["server"] = server
+            except Exception:
+                config["server"] = "127.0.0.1"
+        else:
+            config["server"] = "127.0.0.1"
+
         self.cfg.update(config)
         # save first initialized configs
         open("/user/service.json", "w").write(
@@ -750,9 +767,14 @@ class Service(object):
 
         self.cfg = dict()
         self.cfg["sid"] = uuid.uuid4().hex # default
-        self.cfg["secret"] = options.secret
-        self.cfg["endpoint"] = options.endpoint
-        self.cfg["ckey"] = options.ckey
+        self.cfg["secret"] = options.secret or ""
+        self.cfg["endpoint"] = options.endpoint or ""
+        self.cfg["ckey"] = options.ckey or ""
+        self.cfg["top_enabled"] = all([
+            self.cfg["secret"],
+            self.cfg["endpoint"],
+            self.cfg["ckey"],
+        ])
         self.cfg["server"] = None
 
         # initialize() will rewrite the default cfg configuration at the appropriate time
@@ -760,8 +782,10 @@ class Service(object):
 
         kwargs = {}
         kwargs["cookie_secret"] = self.cfg["sid"]
-        kwargs["ctl"] = TopNetworkCtl(self.cfg["sid"], options.endpoint,
-                                                   options.ckey)
+        kwargs["ctl"] = None
+        if self.cfg["top_enabled"]:
+            kwargs["ctl"] = TopNetworkCtl(self.cfg["sid"], self.cfg["endpoint"],
+                                                       self.cfg["ckey"])
         kwargs["server"] = self.cfg["server"]
         kwargs["secret"] = self.cfg["secret"]
         kwargs["sid"] = self.cfg["sid"]

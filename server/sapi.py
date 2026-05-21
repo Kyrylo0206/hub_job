@@ -52,6 +52,7 @@ __all__ = ["logger", "SecureAPIClient", "SecureAPIClientError", "HttpServiceMana
 
 
 def encrypt_key_with_public_key(public_key, symmetric_key):
+    public_key = public_key + '=' * (-len(public_key) % 4)
     public_key = b64decode(public_key)
     public_key = RSA.import_key(public_key)
     cipher_rsa = PKCS1_OAEP.new(public_key)
@@ -60,6 +61,7 @@ def encrypt_key_with_public_key(public_key, symmetric_key):
 
 
 def decrypt_key_with_private_key(private_key, encrypted_key):
+    private_key = private_key + '=' * (-len(private_key) % 4)
     private_key = b64decode(private_key)
     private_key = RSA.import_key(private_key)
     cipher_rsa = PKCS1_OAEP.new(private_key)

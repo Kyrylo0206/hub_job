@@ -24,13 +24,26 @@ current = os.path.dirname(__file__)
 ip2location_lock = threading.Lock()
 hosts_file_lock = threading.Lock()
 
-geo = IP2Location.IP2Location()
-geo.open(os.path.join(current, "IPDB.BIN"))
+_geo = None
+_geo_loaded = False
+
+def _get_geo():
+    global _geo, _geo_loaded
+    if _geo_loaded:
+        return _geo
+    _geo_loaded = True
+    try:
+        db = IP2Location.IP2Location()
+        db.open(os.path.join(current, "IPDB.BIN"))
+        _geo = db
+    except Exception:
+        _geo = None
+    return _geo
 
 
 __all__ = ["generate_client_pem",
            "current", "ignore_exception",
-           "r_string", "usrdir", "geo", "get_public_ip_info",
+           "r_string", "usrdir", "get_public_ip_info",
            "remove_host_entry", "add_host_entry",
            "save_cert", "remove_cert"]
 
@@ -174,6 +187,9 @@ def generate_client_pem(CN):
 @with_lock(ip2location_lock)
 @ignore_exception({})
 def get_public_ip_info(ip):
+    geo = _get_geo()
+    if geo is None:
+        return {}
     info = geo.get_all(ip)
     float(info.latitude)
     return info.__dict__
